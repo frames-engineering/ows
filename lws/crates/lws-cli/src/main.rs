@@ -1,0 +1,124 @@
+mod commands;
+mod vault;
+
+use clap::{Parser, Subcommand};
+use lws_core::{ChainType, LwsError};
+use lws_signer::hd::HdError;
+use lws_signer::mnemonic::MnemonicError;
+use lws_signer::SignerError;
+
+/// Lightweight Wallet Signer CLI
+#[derive(Parser)]
+#[command(name = "lws", version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate a new BIP-39 mnemonic phrase
+    Generate {
+        /// Number of words (12 or 24)
+        #[arg(long, default_value = "12")]
+        words: u32,
+    },
+    /// Derive an address from a mnemonic
+    Derive {
+        /// BIP-39 mnemonic phrase
+        #[arg(long)]
+        mnemonic: String,
+        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        #[arg(long)]
+        chain: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+    },
+    /// Sign a message with a mnemonic-derived key
+    Sign {
+        /// BIP-39 mnemonic phrase
+        #[arg(long)]
+        mnemonic: String,
+        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        #[arg(long)]
+        chain: String,
+        /// Message to sign
+        #[arg(long)]
+        message: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+    },
+    /// Show vault path and supported chains
+    Info,
+    /// Create a new wallet (generates mnemonic, saves descriptor)
+    CreateWallet {
+        /// Wallet name
+        #[arg(long)]
+        name: String,
+        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        #[arg(long)]
+        chain: String,
+        /// Number of words (12 or 24)
+        #[arg(long, default_value = "12")]
+        words: u32,
+    },
+    /// List all saved wallets
+    ListWallets,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    #[error("{0}")]
+    Lws(#[from] LwsError),
+    #[error("{0}")]
+    Mnemonic(#[from] MnemonicError),
+    #[error("{0}")]
+    Hd(#[from] HdError),
+    #[error("{0}")]
+    Signer(#[from] SignerError),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    InvalidArgs(String),
+}
+
+fn parse_chain(s: &str) -> Result<ChainType, CliError> {
+    s.parse::<ChainType>()
+        .map_err(|e| CliError::InvalidArgs(e))
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<(), CliError> {
+    match cli.command {
+        Commands::Generate { words } => commands::generate::run(words),
+        Commands::Derive {
+            mnemonic,
+            chain,
+            index,
+        } => commands::derive::run(&mnemonic, &chain, index),
+        Commands::Sign {
+            mnemonic,
+            chain,
+            message,
+            index,
+        } => commands::sign::run(&mnemonic, &chain, &message, index),
+        Commands::Info => commands::info::run(),
+        Commands::CreateWallet {
+            name,
+            chain,
+            words,
+        } => commands::wallet::create(&name, &chain, words),
+        Commands::ListWallets => commands::wallet::list(),
+    }
+}
