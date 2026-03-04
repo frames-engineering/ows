@@ -22,7 +22,7 @@ LWS addresses this gap. It defines a minimal, chain-agnostic standard for wallet
 │   ├── 03-signing-interface.md      # sign, signAndSend, signMessage operations
 │   ├── 04-policy-engine.md          # Pre-signing transaction policies
 │   ├── 05-key-isolation.md          # HD derivation paths and key separation
-│   ├── 06-agent-access-layer.md     # MCP server, REST API, library interfaces
+│   ├── 06-agent-access-layer.md     # MCP server, native language bindings
 │   ├── 07-multi-chain-support.md    # Multi-chain account management
 │   └── 08-wallet-lifecycle.md       # Creation, recovery, deletion, lifecycle events
 │
@@ -30,10 +30,6 @@ LWS addresses this gap. It defines a minimal, chain-agnostic standard for wallet
 │   └── crates/
 │       ├── lws-core/                # Core types, CAIP parsing, config (zero crypto deps)
 │       └── lws-signer/             # Signing, HD derivation, chain-specific implementations
-│
-├── sdks/                        # Client SDKs for the LWS REST API
-│   ├── python/                      # Python SDK (async + sync, httpx)
-│   └── typescript/                  # TypeScript SDK (@lws/sdk, native fetch)
 │
 └── website/                     # Documentation site (localwalletstandard.org)
 ```
@@ -70,9 +66,26 @@ cargo test --workspace
 | `lws update` | Update lws to the latest version |
 | `lws uninstall` | Remove lws from the system |
 
-## SDKs
+## Language Bindings
 
-LWS provides client SDKs that wrap the REST API (`http://127.0.0.1:8402`) with full type safety.
+LWS provides native bindings that call directly into the Rust `lws-lib` crate via FFI — no HTTP server or subprocess required.
+
+### Node.js
+
+```bash
+npm install @lws/node
+```
+
+```typescript
+import { createWallet, listWallets, signMessage } from "@lws/node";
+
+const wallet = createWallet("agent-treasury", "evm", "my-passphrase");
+console.log(wallet.address);
+
+const wallets = listWallets();
+const result = signMessage("agent-treasury", "evm", "hello", "my-passphrase");
+console.log(result.signature);
+```
 
 ### Python
 
@@ -81,49 +94,17 @@ pip install lws
 ```
 
 ```python
-from lws import LWSClient, ChainType
+from lws import create_wallet, list_wallets, sign_message
 
-async with LWSClient(api_key="lws_key_...") as client:
-    wallets = await client.list_wallets()
-    result = await client.sign_and_send(
-        wallet_id=wallets[0].id,
-        chain_id="eip155:8453",
-        transaction={"to": "0x...", "value": "1000000000000000"},
-    )
-    print(result.tx_hash)
+wallet = create_wallet("agent-treasury", "evm", "my-passphrase")
+print(wallet["address"])
+
+wallets = list_wallets()
+result = sign_message("agent-treasury", "evm", "hello", "my-passphrase")
+print(result["signature"])
 ```
 
-A synchronous client is also available:
-
-```python
-from lws import LWSClientSync
-
-with LWSClientSync(api_key="lws_key_...") as client:
-    wallets = client.list_wallets()
-```
-
-### TypeScript
-
-```bash
-npm install @lws/sdk
-```
-
-```typescript
-import { LWSClient } from "@lws/sdk";
-
-const client = new LWSClient({ apiKey: "lws_key_..." });
-
-const wallets = await client.listWallets();
-const result = await client.signAndSend({
-  wallet_id: wallets[0].id,
-  chain: "eip155:8453",
-  transaction: { to: "0x...", value: "1000000000000000" },
-});
-
-console.log(result.tx_hash);
-```
-
-Both SDKs require Node 18+ (TypeScript) or Python 3.10+ (Python). See the full API in `sdks/python/` and `sdks/typescript/`.
+Both bindings are compiled native modules (NAPI for Node.js, PyO3 for Python) and share the same API surface — wallet management, signing, and mnemonic operations.
 
 ## License
 

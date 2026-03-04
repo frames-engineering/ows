@@ -214,6 +214,8 @@ enum CliError {
     #[error("{0}")]
     Lws(#[from] LwsError),
     #[error("{0}")]
+    Lib(#[from] lws_lib::LwsLibError),
+    #[error("{0}")]
     Mnemonic(#[from] MnemonicError),
     #[error("{0}")]
     Hd(#[from] HdError),

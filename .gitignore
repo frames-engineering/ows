@@ -1,12 +1,28 @@
-website/docs/md/
-lws/target/
+# Rust
+**/target/
+.claude
 
-# Python SDK
-sdks/python/.venv/
-sdks/python/.pytest_cache/
-sdks/python/src/*.egg-info/
+# Python bindings
+bindings/python/.venv/
+bindings/python/*.egg-info/
 __pycache__/
+*.pyc
+*.so
 
-# TypeScript SDK
-sdks/typescript/node_modules/
-sdks/typescript/dist/
+# Node bindings
+bindings/node/node_modules/
+bindings/node/*.node
+bindings/node/index.js
+bindings/node/index.d.ts
+
+# Website
+website/docs/md/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

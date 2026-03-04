@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 lws-core = { path = "../lws-core" }
 lws-signer = { path = "../lws-signer" }
+lws-lib = { path = "../lws-lib" }
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

@@ -1,0 +1,256 @@
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
+use std::path::PathBuf;
+
+fn vault_path(p: Option<String>) -> Option<PathBuf> {
+    p.map(PathBuf::from)
+}
+
+fn map_err(e: lws_lib::LwsLibError) -> napi::Error {
+    napi::Error::from_reason(e.to_string())
+}
+
+/// Wallet information returned by create/import/list/get operations.
+#[napi(object)]
+pub struct WalletInfo {
+    pub id: String,
+    pub name: String,
+    pub chain: String,
+    pub address: String,
+    pub derivation_path: String,
+    pub created_at: String,
+}
+
+impl From<lws_lib::WalletInfo> for WalletInfo {
+    fn from(w: lws_lib::WalletInfo) -> Self {
+        WalletInfo {
+            id: w.id,
+            name: w.name,
+            chain: w.chain.to_string(),
+            address: w.address,
+            derivation_path: w.derivation_path,
+            created_at: w.created_at,
+        }
+    }
+}
+
+/// Result from a signing operation.
+#[napi(object)]
+pub struct SignResult {
+    pub signature: String,
+    pub recovery_id: Option<u32>,
+}
+
+/// Result from a sign-and-send operation.
+#[napi(object)]
+pub struct SendResult {
+    pub tx_hash: String,
+}
+
+/// Generate a new BIP-39 mnemonic phrase.
+#[napi]
+pub fn generate_mnemonic(words: Option<u32>) -> Result<String> {
+    lws_lib::generate_mnemonic(words.unwrap_or(12)).map_err(map_err)
+}
+
+/// Derive an address from a mnemonic for the given chain.
+#[napi]
+pub fn derive_address(
+    mnemonic: String,
+    chain: String,
+    index: Option<u32>,
+) -> Result<String> {
+    lws_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
+}
+
+/// Create a new wallet (generates mnemonic, encrypts, saves to vault).
+#[napi]
+pub fn create_wallet(
+    name: String,
+    chain: String,
+    passphrase: String,
+    words: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<WalletInfo> {
+    lws_lib::create_wallet(
+        &name,
+        &chain,
+        words,
+        &passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(WalletInfo::from)
+    .map_err(map_err)
+}
+
+/// Import a wallet from a mnemonic phrase.
+#[napi]
+pub fn import_wallet_mnemonic(
+    name: String,
+    chain: String,
+    mnemonic: String,
+    passphrase: String,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<WalletInfo> {
+    lws_lib::import_wallet_mnemonic(
+        &name,
+        &chain,
+        &mnemonic,
+        &passphrase,
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(WalletInfo::from)
+    .map_err(map_err)
+}
+
+/// Import a wallet from a hex-encoded private key.
+#[napi]
+pub fn import_wallet_private_key(
+    name: String,
+    chain: String,
+    private_key_hex: String,
+    passphrase: String,
+    vault_path_opt: Option<String>,
+) -> Result<WalletInfo> {
+    lws_lib::import_wallet_private_key(
+        &name,
+        &chain,
+        &private_key_hex,
+        &passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(WalletInfo::from)
+    .map_err(map_err)
+}
+
+/// List all wallets in the vault.
+#[napi]
+pub fn list_wallets(vault_path_opt: Option<String>) -> Result<Vec<WalletInfo>> {
+    lws_lib::list_wallets(vault_path(vault_path_opt).as_deref())
+        .map(|ws| ws.into_iter().map(WalletInfo::from).collect())
+        .map_err(map_err)
+}
+
+/// Get a single wallet by name or ID.
+#[napi]
+pub fn get_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Result<WalletInfo> {
+    lws_lib::get_wallet(&name_or_id, vault_path(vault_path_opt).as_deref())
+        .map(WalletInfo::from)
+        .map_err(map_err)
+}
+
+/// Delete a wallet from the vault.
+#[napi]
+pub fn delete_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Result<()> {
+    lws_lib::delete_wallet(&name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
+}
+
+/// Export a wallet's secret (mnemonic or private key).
+#[napi]
+pub fn export_wallet(
+    name_or_id: String,
+    passphrase: String,
+    vault_path_opt: Option<String>,
+) -> Result<String> {
+    lws_lib::export_wallet(
+        &name_or_id,
+        &passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)
+}
+
+/// Rename a wallet.
+#[napi]
+pub fn rename_wallet(
+    name_or_id: String,
+    new_name: String,
+    vault_path_opt: Option<String>,
+) -> Result<()> {
+    lws_lib::rename_wallet(
+        &name_or_id,
+        &new_name,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)
+}
+
+/// Sign a transaction. Returns hex-encoded signature.
+#[napi]
+pub fn sign_transaction(
+    wallet: String,
+    chain: String,
+    tx_hex: String,
+    passphrase: String,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    lws_lib::sign_transaction(
+        &wallet,
+        &chain,
+        &tx_hex,
+        &passphrase,
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+    })
+    .map_err(map_err)
+}
+
+/// Sign a message. Returns hex-encoded signature.
+#[napi]
+pub fn sign_message(
+    wallet: String,
+    chain: String,
+    message: String,
+    passphrase: String,
+    encoding: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    lws_lib::sign_message(
+        &wallet,
+        &chain,
+        &message,
+        &passphrase,
+        encoding.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+    })
+    .map_err(map_err)
+}
+
+/// Sign and broadcast a transaction. Returns the transaction hash.
+#[napi]
+pub fn sign_and_send(
+    wallet: String,
+    chain: String,
+    tx_hex: String,
+    passphrase: String,
+    index: Option<u32>,
+    rpc_url: Option<String>,
+    vault_path_opt: Option<String>,
+) -> Result<SendResult> {
+    lws_lib::sign_and_send(
+        &wallet,
+        &chain,
+        &tx_hex,
+        &passphrase,
+        index,
+        rpc_url.as_deref(),
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SendResult {
+        tx_hash: r.tx_hash,
+    })
+    .map_err(map_err)
+}

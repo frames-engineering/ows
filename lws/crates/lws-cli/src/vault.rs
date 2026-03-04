@@ -1,134 +1,27 @@
-use lws_core::{Config, EncryptedWallet};
-use std::fs;
-use std::path::PathBuf;
+use lws_core::EncryptedWallet;
 
 use crate::CliError;
 
-/// Set directory permissions to 0o700 (owner-only).
-#[cfg(unix)]
-fn set_dir_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let perms = fs::Permissions::from_mode(0o700);
-    if let Err(e) = fs::set_permissions(path, perms) {
-        eprintln!("warning: failed to set permissions on {}: {e}", path.display());
-    }
-}
+// Delegate vault operations to lws-lib, using the default vault path.
 
-/// Set file permissions to 0o600 (owner read/write only).
-#[cfg(unix)]
-fn set_file_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let perms = fs::Permissions::from_mode(0o600);
-    if let Err(e) = fs::set_permissions(path, perms) {
-        eprintln!("warning: failed to set permissions on {}: {e}", path.display());
-    }
-}
-
-/// Warn if a directory has permissions more open than 0o700.
-#[cfg(unix)]
-pub fn check_vault_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path) {
-        let mode = meta.permissions().mode() & 0o777;
-        if mode != 0o700 {
-            eprintln!(
-                "warning: {} has permissions {:04o}, expected 0700",
-                path.display(),
-                mode
-            );
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn set_dir_permissions(_path: &std::path::Path) {}
-
-#[cfg(not(unix))]
-fn set_file_permissions(_path: &std::path::Path) {}
-
-#[cfg(not(unix))]
-pub fn check_vault_permissions(_path: &std::path::Path) {}
-
-/// Returns the wallets directory, creating it with strict permissions if necessary.
-pub fn wallets_dir() -> Result<PathBuf, CliError> {
-    let config = Config::default();
-    let lws_dir = &config.vault_path;
-    let dir = lws_dir.join("wallets");
-    fs::create_dir_all(&dir)?;
-    set_dir_permissions(lws_dir);
-    set_dir_permissions(&dir);
-    Ok(dir)
-}
-
-/// Save an encrypted wallet file with strict permissions.
 pub fn save_encrypted_wallet(wallet: &EncryptedWallet) -> Result<(), CliError> {
-    let dir = wallets_dir()?;
-    let path = dir.join(format!("{}.json", wallet.id));
-    let json = serde_json::to_string_pretty(wallet)?;
-    fs::write(&path, json)?;
-    set_file_permissions(&path);
-    Ok(())
+    Ok(lws_lib::vault::save_encrypted_wallet(wallet, None)?)
 }
 
-/// Load all encrypted wallets from the vault.
-/// Checks directory permissions and warns if insecure.
-/// Returns wallets sorted by created_at descending (newest first).
 pub fn list_encrypted_wallets() -> Result<Vec<EncryptedWallet>, CliError> {
-    let dir = wallets_dir()?;
-    check_vault_permissions(&dir);
-
-    let mut wallets = Vec::new();
-
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(wallets),
-        Err(e) => return Err(e.into()),
-    };
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        match fs::read_to_string(&path) {
-            Ok(contents) => match serde_json::from_str::<EncryptedWallet>(&contents) {
-                Ok(w) => wallets.push(w),
-                Err(e) => {
-                    eprintln!("warning: skipping {}: {e}", path.display());
-                }
-            },
-            Err(e) => {
-                eprintln!("warning: skipping {}: {e}", path.display());
-            }
-        }
-    }
-
-    wallets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(wallets)
+    Ok(lws_lib::vault::list_encrypted_wallets(None)?)
 }
 
-/// Look up a wallet by exact ID first, then by name (case-sensitive).
-/// Returns an error if no wallet matches or if the name is ambiguous.
 pub fn load_wallet_by_name_or_id(name_or_id: &str) -> Result<EncryptedWallet, CliError> {
-    let wallets = list_encrypted_wallets()?;
+    Ok(lws_lib::vault::load_wallet_by_name_or_id(name_or_id, None)?)
+}
 
-    // Try exact ID match first
-    if let Some(w) = wallets.iter().find(|w| w.id == name_or_id) {
-        return Ok(w.clone());
-    }
+pub fn delete_wallet(id: &str) -> Result<(), CliError> {
+    Ok(lws_lib::vault::delete_wallet_file(id, None)?)
+}
 
-    // Try name match (case-sensitive)
-    let matches: Vec<&EncryptedWallet> = wallets.iter().filter(|w| w.name == name_or_id).collect();
-    match matches.len() {
-        0 => Err(CliError::InvalidArgs(format!(
-            "wallet not found: '{name_or_id}'"
-        ))),
-        1 => Ok(matches[0].clone()),
-        n => Err(CliError::InvalidArgs(format!(
-            "ambiguous wallet name '{name_or_id}' matches {n} wallets; use the wallet ID instead"
-        ))),
-    }
+pub fn wallet_name_exists(name: &str) -> Result<bool, CliError> {
+    Ok(lws_lib::vault::wallet_name_exists(name, None)?)
 }
 
 /// Prompt the user for a passphrase (with confirmation for new wallets).
@@ -151,25 +44,6 @@ pub fn prompt_passphrase(confirm: bool) -> Result<String, CliError> {
     }
 
     Ok(pass)
-}
-
-/// Delete a wallet file from the vault by ID.
-pub fn delete_wallet(id: &str) -> Result<(), CliError> {
-    let dir = wallets_dir()?;
-    let path = dir.join(format!("{id}.json"));
-    if !path.exists() {
-        return Err(CliError::InvalidArgs(format!(
-            "wallet file not found: {id}"
-        )));
-    }
-    fs::remove_file(&path)?;
-    Ok(())
-}
-
-/// Check whether a wallet with the given name already exists in the vault.
-pub fn wallet_name_exists(name: &str) -> Result<bool, CliError> {
-    let wallets = list_encrypted_wallets()?;
-    Ok(wallets.iter().any(|w| w.name == name))
 }
 
 /// Read passphrase from LWS_PASSPHRASE env var, falling back to interactive prompt.

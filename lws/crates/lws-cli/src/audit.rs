@@ -73,11 +73,6 @@ pub fn log_wallet_created(wallet_id: &str, chain_id: &str, address: &str) {
     log_wallet_event(wallet_id, "create_wallet", Some(chain_id), Some(address), None);
 }
 
-/// Convenience: log a signing event.
-pub fn log_sign(wallet_id: &str, chain_id: &str, operation: &str) {
-    log_wallet_event(wallet_id, operation, Some(chain_id), None, None);
-}
-
 /// Convenience: log a wallet import event.
 pub fn log_wallet_imported(wallet_id: &str, chain_id: &str, address: &str) {
     log_wallet_event(wallet_id, "import_wallet", Some(chain_id), Some(address), None);
@@ -103,7 +98,3 @@ pub fn log_broadcast(wallet_id: &str, chain_id: &str, tx_hash: &str) {
     log_wallet_event(wallet_id, "broadcast_transaction", Some(chain_id), None, Some(format!("tx_hash={tx_hash}")));
 }
 
-/// Convenience: log a derive event.
-pub fn log_derive(chain_id: &str, address: &str) {
-    log_wallet_event("ephemeral", "derive_address", Some(chain_id), Some(address), None);
-}

@@ -1,0 +1,20 @@
+[package]
+name = "lws-lib"
+version = "0.2.0"
+edition = "2021"
+description = "High-level library API for the Lightweight Wallet Signer"
+
+[dependencies]
+lws-core = { path = "../lws-core" }
+lws-signer = { path = "../lws-signer" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+base64 = "0.22"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

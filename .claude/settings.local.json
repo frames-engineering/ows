@@ -39,7 +39,18 @@
       "WebFetch(domain:docs.web3js.org)",
       "WebFetch(domain:docs.ethers.org)",
       "Bash(cargo test:*)",
-      "Bash(chmod +x:*)"
+      "Bash(chmod +x:*)",
+      "Bash(cargo build:*)",
+      "Bash(mv sdks:*)",
+      "Bash(rm:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(npx vitest:*)",
+      "Bash(gh issue:*)",
+      "Bash(grep:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo check:*)",
+      "Bash($LWS_BIN mnemonic:*)",
+      "Bash(bash:*)"
     ]
   }
 }

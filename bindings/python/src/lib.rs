@@ -1,0 +1,243 @@
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use std::path::PathBuf;
+
+fn vault_path(p: Option<String>) -> Option<PathBuf> {
+    p.map(PathBuf::from)
+}
+
+fn map_err(e: lws_lib::LwsLibError) -> PyErr {
+    PyRuntimeError::new_err(e.to_string())
+}
+
+/// Generate a new BIP-39 mnemonic phrase.
+#[pyfunction]
+#[pyo3(signature = (words=12))]
+fn generate_mnemonic(words: u32) -> PyResult<String> {
+    lws_lib::generate_mnemonic(words).map_err(map_err)
+}
+
+/// Derive an address from a mnemonic for the given chain.
+#[pyfunction]
+#[pyo3(signature = (mnemonic, chain, index=None))]
+fn derive_address(mnemonic: &str, chain: &str, index: Option<u32>) -> PyResult<String> {
+    lws_lib::derive_address(mnemonic, chain, index).map_err(map_err)
+}
+
+/// Create a new wallet.
+#[pyfunction]
+#[pyo3(signature = (name, chain, passphrase, words=None, vault_path_opt=None))]
+fn create_wallet(
+    name: &str,
+    chain: &str,
+    passphrase: &str,
+    words: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let info = lws_lib::create_wallet(name, chain, words, passphrase, vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)?;
+    Python::with_gil(|py| wallet_info_to_dict(py, &info))
+}
+
+/// Import a wallet from a mnemonic phrase.
+#[pyfunction]
+#[pyo3(signature = (name, chain, mnemonic, passphrase, index=None, vault_path_opt=None))]
+fn import_wallet_mnemonic(
+    name: &str,
+    chain: &str,
+    mnemonic: &str,
+    passphrase: &str,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let info = lws_lib::import_wallet_mnemonic(
+        name, chain, mnemonic, passphrase, index, vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+    Python::with_gil(|py| wallet_info_to_dict(py, &info))
+}
+
+/// Import a wallet from a hex-encoded private key.
+#[pyfunction]
+#[pyo3(signature = (name, chain, private_key_hex, passphrase, vault_path_opt=None))]
+fn import_wallet_private_key(
+    name: &str,
+    chain: &str,
+    private_key_hex: &str,
+    passphrase: &str,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let info = lws_lib::import_wallet_private_key(
+        name, chain, private_key_hex, passphrase, vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+    Python::with_gil(|py| wallet_info_to_dict(py, &info))
+}
+
+/// List all wallets in the vault.
+#[pyfunction]
+#[pyo3(signature = (vault_path_opt=None))]
+fn list_wallets(vault_path_opt: Option<String>) -> PyResult<PyObject> {
+    let wallets = lws_lib::list_wallets(vault_path(vault_path_opt).as_deref()).map_err(map_err)?;
+    Python::with_gil(|py| {
+        let list = pyo3::types::PyList::empty_bound(py);
+        for w in &wallets {
+            let dict = wallet_info_to_dict_inner(py, w)?;
+            list.append(dict)?;
+        }
+        Ok(list.to_object(py))
+    })
+}
+
+/// Get a single wallet by name or ID.
+#[pyfunction]
+#[pyo3(signature = (name_or_id, vault_path_opt=None))]
+fn get_wallet(name_or_id: &str, vault_path_opt: Option<String>) -> PyResult<PyObject> {
+    let info = lws_lib::get_wallet(name_or_id, vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)?;
+    Python::with_gil(|py| wallet_info_to_dict(py, &info))
+}
+
+/// Delete a wallet from the vault.
+#[pyfunction]
+#[pyo3(signature = (name_or_id, vault_path_opt=None))]
+fn delete_wallet(name_or_id: &str, vault_path_opt: Option<String>) -> PyResult<()> {
+    lws_lib::delete_wallet(name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
+}
+
+/// Export a wallet's secret (mnemonic or private key).
+#[pyfunction]
+#[pyo3(signature = (name_or_id, passphrase, vault_path_opt=None))]
+fn export_wallet(
+    name_or_id: &str,
+    passphrase: &str,
+    vault_path_opt: Option<String>,
+) -> PyResult<String> {
+    lws_lib::export_wallet(name_or_id, passphrase, vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)
+}
+
+/// Rename a wallet.
+#[pyfunction]
+#[pyo3(signature = (name_or_id, new_name, vault_path_opt=None))]
+fn rename_wallet(
+    name_or_id: &str,
+    new_name: &str,
+    vault_path_opt: Option<String>,
+) -> PyResult<()> {
+    lws_lib::rename_wallet(name_or_id, new_name, vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)
+}
+
+/// Sign a transaction.
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, tx_hex, passphrase, index=None, vault_path_opt=None))]
+fn sign_transaction(
+    wallet: &str,
+    chain: &str,
+    tx_hex: &str,
+    passphrase: &str,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = lws_lib::sign_transaction(
+        wallet, chain, tx_hex, passphrase, index, vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("signature", &result.signature)?;
+        dict.set_item("recovery_id", result.recovery_id)?;
+        Ok(dict.to_object(py))
+    })
+}
+
+/// Sign a message.
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, message, passphrase, encoding=None, index=None, vault_path_opt=None))]
+fn sign_message(
+    wallet: &str,
+    chain: &str,
+    message: &str,
+    passphrase: &str,
+    encoding: Option<&str>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = lws_lib::sign_message(
+        wallet, chain, message, passphrase, encoding, index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("signature", &result.signature)?;
+        dict.set_item("recovery_id", result.recovery_id)?;
+        Ok(dict.to_object(py))
+    })
+}
+
+/// Sign and broadcast a transaction.
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, tx_hex, passphrase, index=None, rpc_url=None, vault_path_opt=None))]
+fn sign_and_send(
+    wallet: &str,
+    chain: &str,
+    tx_hex: &str,
+    passphrase: &str,
+    index: Option<u32>,
+    rpc_url: Option<&str>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = lws_lib::sign_and_send(
+        wallet, chain, tx_hex, passphrase, index, rpc_url,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("tx_hash", &result.tx_hash)?;
+        Ok(dict.to_object(py))
+    })
+}
+
+fn wallet_info_to_dict(py: Python<'_>, info: &lws_lib::WalletInfo) -> PyResult<PyObject> {
+    let dict = wallet_info_to_dict_inner(py, info)?;
+    Ok(dict.to_object(py))
+}
+
+fn wallet_info_to_dict_inner<'py>(
+    py: Python<'py>,
+    info: &lws_lib::WalletInfo,
+) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new_bound(py);
+    dict.set_item("id", &info.id)?;
+    dict.set_item("name", &info.name)?;
+    dict.set_item("chain", info.chain.to_string())?;
+    dict.set_item("address", &info.address)?;
+    dict.set_item("derivation_path", &info.derivation_path)?;
+    dict.set_item("created_at", &info.created_at)?;
+    Ok(dict)
+}
+
+/// Python module definition.
+#[pymodule]
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(generate_mnemonic, m)?)?;
+    m.add_function(wrap_pyfunction!(derive_address, m)?)?;
+    m.add_function(wrap_pyfunction!(create_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(import_wallet_mnemonic, m)?)?;
+    m.add_function(wrap_pyfunction!(import_wallet_private_key, m)?)?;
+    m.add_function(wrap_pyfunction!(list_wallets, m)?)?;
+    m.add_function(wrap_pyfunction!(get_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(delete_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(export_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(rename_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_transaction, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_message, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_and_send, m)?)?;
+    Ok(())
+}

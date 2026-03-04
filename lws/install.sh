@@ -9,12 +9,26 @@ warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 TMPDIR=""
+REPO_DIR=""
 cleanup() {
   if [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then
     rm -rf "$TMPDIR"
   fi
 }
 trap cleanup EXIT
+
+# --- Clone repo into TMPDIR (idempotent) ---
+ensure_repo_cloned() {
+  if [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
+    return
+  fi
+  if [ -z "$TMPDIR" ] || [ ! -d "$TMPDIR" ]; then
+    TMPDIR="$(mktemp -d)"
+  fi
+  REPO_DIR="$TMPDIR/repo"
+  info "Cloning repository..."
+  git clone --depth 1 "https://github.com/${REPO}.git" "$REPO_DIR" --quiet
+}
 
 # --- Detect platform ---
 detect_platform() {
@@ -83,15 +97,13 @@ build_from_source() {
     fi
   fi
 
-  TMPDIR="$(mktemp -d)"
-  info "Cloning repository..."
-  git clone --depth 1 "https://github.com/${REPO}.git" "$TMPDIR" --quiet
+  ensure_repo_cloned
 
   info "Building lws..."
-  cd "$TMPDIR/lws"
+  cd "$REPO_DIR/lws"
   cargo build --workspace --release
 
-  local bin_path="$TMPDIR/lws/target/release/lws"
+  local bin_path="$REPO_DIR/lws/target/release/lws"
   if [ ! -f "$bin_path" ]; then
     err "Build failed — binary not found"
   fi
@@ -151,6 +163,74 @@ setup_path() {
   esac
 }
 
+# --- Install Python bindings ---
+install_python_bindings() {
+  if ! command -v python3 &>/dev/null; then
+    info "python3 not found — skipping Python bindings"
+    return
+  fi
+  if ! command -v pip3 &>/dev/null && ! python3 -m pip --version &>/dev/null 2>&1; then
+    info "pip not found — skipping Python bindings"
+    return
+  fi
+
+  # Prefer pip3 command, fall back to python3 -m pip
+  local pip_cmd
+  if command -v pip3 &>/dev/null; then
+    pip_cmd="pip3"
+  else
+    pip_cmd="python3 -m pip"
+  fi
+
+  info "Installing Python bindings..."
+
+  if ! command -v maturin &>/dev/null; then
+    info "Installing maturin..."
+    $pip_cmd install maturin
+  fi
+
+  cd "$REPO_DIR/bindings/python"
+  maturin build --release
+
+  local wheel
+  wheel="$(find "$REPO_DIR/bindings/python/target/wheels" -name '*.whl' | head -1)"
+  if [ -z "$wheel" ]; then
+    warn "Python bindings build failed — no wheel produced"
+    return
+  fi
+
+  $pip_cmd install "$wheel"
+  info "Python bindings installed successfully"
+}
+
+# --- Install Node bindings ---
+install_node_bindings() {
+  if ! command -v node &>/dev/null; then
+    info "node not found — skipping Node bindings"
+    return
+  fi
+  if ! command -v npm &>/dev/null; then
+    info "npm not found — skipping Node bindings"
+    return
+  fi
+
+  info "Installing Node bindings..."
+
+  cd "$REPO_DIR/bindings/node"
+  npm install --ignore-scripts
+  npm run build
+
+  npm install -g .
+  info "Node bindings installed successfully"
+}
+
+# --- Install bindings ---
+install_bindings() {
+  ensure_repo_cloned
+  install_python_bindings
+  install_node_bindings
+}
+
 # --- Main ---
 main() {
   info "LWS installer"
@@ -168,6 +248,10 @@ main() {
   fi
 
   setup_path
+
+  echo
+  info "Installing language bindings..."
+  install_bindings
 
   echo
   info "LWS installed successfully!"

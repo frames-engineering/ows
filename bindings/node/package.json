@@ -1,0 +1,28 @@
+{
+  "name": "@lws/node",
+  "version": "0.2.0",
+  "description": "Node.js native bindings for the Lightweight Wallet Signer",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "lws-node",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node --test __test__/index.spec.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ]
+}

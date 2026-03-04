@@ -4,7 +4,7 @@
 
 ## Design Decision
 
-**LWS exposes wallet operations through three access modes — an MCP server (for AI agents), a REST API (for programmatic access), and a direct library import (for embedded use) — all backed by the same core implementation. The MCP interface is the primary agent access path.**
+**LWS exposes wallet operations through two access modes — an MCP server (for AI agents) and native language bindings (for programmatic use) — both backed by the same core Rust implementation. The MCP interface is the primary agent access path.**
 
 ### Why MCP as the Primary Agent Interface
 
@@ -163,87 +163,90 @@ For owner (sudo) access — no API key, requires passphrase:
 }
 ```
 
-## REST API
+## Native Language Bindings
 
-For non-MCP consumers (web apps, custom scripts, other services), LWS exposes a REST API on `localhost`:
+For non-MCP consumers (scripts, web apps, CLIs), LWS provides native bindings that call directly into the Rust `lws-lib` crate via FFI. No HTTP server or subprocess is required — the bindings are compiled native modules that run in-process.
 
-```
-POST /v1/wallets                     → Create wallet (owner only)
-GET  /v1/wallets                     → List wallets
-GET  /v1/wallets/:id                 → Get wallet descriptor
-POST /v1/wallets/:id/sign            → Sign transaction
-POST /v1/wallets/:id/sign-and-send   → Sign and broadcast
-POST /v1/wallets/:id/sign-message    → Sign message
-GET  /v1/wallets/:id/policy          → Get caller's policies
-
-POST   /v1/keys                      → Create API key (owner only)
-GET    /v1/keys                      → List API keys (owner only)
-GET    /v1/keys/:id                  → Get key details (owner only)
-DELETE /v1/keys/:id                  → Revoke key (owner only)
-```
-
-### Security: Localhost Only
-
-The REST API MUST bind to `127.0.0.1` only. It MUST NOT be exposed on `0.0.0.0` or any network interface. For remote access, use an SSH tunnel or a reverse proxy with authentication.
-
-### Authentication
-
-The REST API supports two authentication modes:
-
-**API key (agent access):** Agents authenticate with an API key prefixed `lws_key_`. The key is scoped to specific wallets and has policies attached. Requests to wallets outside the key's scope return `403`.
+### Node.js (NAPI)
 
 ```bash
-curl -H "Authorization: Bearer lws_key_a1b2c3d4e5f6..." \
-  http://127.0.0.1:8402/v1/wallets
+npm install @lws/node
 ```
-
-**Owner access:** The owner authenticates via a passphrase-based session token or root token. Owner requests bypass all policy evaluation and can access all wallets and key management endpoints.
-
-```bash
-# Unlock the vault and get a session token
-curl -X POST http://127.0.0.1:8402/v1/auth/unlock \
-  -d '{"passphrase": "..."}'
-# => { "sessionToken": "lws_session_..." }
-
-curl -H "Authorization: Bearer lws_session_..." \
-  http://127.0.0.1:8402/v1/keys
-```
-
-API keys use the `lws_key_` prefix. The raw token is shown once at creation and never stored — only its SHA-256 hash is persisted in the key file. Key management endpoints (`/v1/keys/*`) are restricted to owner access.
-
-## Library SDK
-
-For embedding LWS directly into an application (no subprocess or server):
 
 ```typescript
-import { LWS } from "@lws/core";
+import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@lws/node";
 
-const lws = new LWS({ vaultPath: "~/.lws" });
-await lws.unlock("passphrase");
+// Create a wallet
+const wallet = createWallet("agent-treasury", "evm", "my-passphrase");
+// => { id, name, chain, address, derivation_path, created_at }
 
-const wallets = await lws.listWallets();
-const result = await lws.signAndSend({
-  walletId: wallets[0].id,
-  chainId: "eip155:8453",
-  transaction: {
-    to: "0x...",
-    value: "1000000000000000",
-    data: "0x"
-  }
-});
+// List all wallets
+const wallets = listWallets();
 
-console.log(result.transactionHash);
+// Sign a message
+const sig = signMessage("agent-treasury", "evm", "hello", "my-passphrase");
+// => { signature, recoveryId? }
+
+// Sign and broadcast a transaction
+const result = signAndSend("agent-treasury", "evm", "<tx-hex>", "my-passphrase");
+// => { txHash }
 ```
 
-When used as a library, the signing enclave runs as a worker thread (not a subprocess) for lower latency, but key isolation guarantees are weaker — the keys exist in the same process. For agent use cases, the MCP or REST interfaces (which use subprocess isolation) are recommended.
+### Python (PyO3)
+
+```bash
+pip install lws
+```
+
+```python
+from lws import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
+
+# Create a wallet
+wallet = create_wallet("agent-treasury", "evm", "my-passphrase")
+# => {"id", "name", "chain", "address", "derivation_path", "created_at"}
+
+# List all wallets
+wallets = list_wallets()
+
+# Sign a message
+sig = sign_message("agent-treasury", "evm", "hello", "my-passphrase")
+# => {"signature", "recovery_id"}
+
+# Sign and broadcast a transaction
+result = sign_and_send("agent-treasury", "evm", "<tx-hex>", "my-passphrase")
+# => {"tx_hash"}
+```
+
+### Available Functions
+
+Both bindings expose the same 13 functions:
+
+| Function | Description |
+|---|---|
+| `generate_mnemonic(words?)` | Generate a BIP-39 mnemonic (12 or 24 words) |
+| `derive_address(mnemonic, chain, index?)` | Derive a chain-specific address from a mnemonic |
+| `create_wallet(name, chain, passphrase, words?, vault_path?)` | Create a new wallet (generates mnemonic, encrypts, saves) |
+| `import_wallet_mnemonic(name, chain, mnemonic, passphrase, index?, vault_path?)` | Import a wallet from a mnemonic |
+| `import_wallet_private_key(name, chain, key_hex, passphrase, vault_path?)` | Import a wallet from a raw private key |
+| `list_wallets(vault_path?)` | List all wallets in the vault |
+| `get_wallet(name_or_id, vault_path?)` | Get a single wallet by name or ID |
+| `delete_wallet(name_or_id, vault_path?)` | Delete a wallet |
+| `export_wallet(name_or_id, passphrase, vault_path?)` | Export a wallet's secret (mnemonic or private key) |
+| `rename_wallet(name_or_id, new_name, vault_path?)` | Rename a wallet |
+| `sign_transaction(wallet, chain, tx_hex, passphrase, index?, vault_path?)` | Sign a transaction |
+| `sign_message(wallet, chain, message, passphrase, encoding?, index?, vault_path?)` | Sign a message |
+| `sign_and_send(wallet, chain, tx_hex, passphrase, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
+
+All functions operate on the default vault (`~/.lws/`) unless a custom `vault_path` is provided. The passphrase is used to decrypt wallet key material for signing operations.
+
+> **Note:** Because the bindings run in-process, key material is decrypted within the application's address space. For agent use cases where key isolation is critical, the MCP interface (which uses subprocess isolation) is recommended.
 
 ## Access Layer Comparison
 
 | Mode | Key Isolation | Latency | Best For |
 |---|---|---|---|
 | MCP Server | Full (subprocess) | ~50ms overhead | AI agents (Claude, GPT, etc.) |
-| REST API | Full (subprocess) | ~10ms overhead | Scripts, web apps, other services |
-| Library SDK | Partial (worker thread) | Minimal | Embedded applications, CLIs |
+| Native Bindings | In-process (no isolation) | Minimal | Scripts, CLIs, embedded applications |
 
 ## Agent Interaction Example
 
