@@ -1,9 +1,15 @@
 {
   "name": "@local-wallet-standard/node-linux-x64-gnu",
-  "version": "0.2.0",
-  "os": ["linux"],
-  "cpu": ["x64"],
+  "version": "0.2.8",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "main": "lws-node.linux-x64-gnu.node",
-  "files": ["lws-node.linux-x64-gnu.node"],
+  "files": [
+    "lws-node.linux-x64-gnu.node"
+  ],
   "license": "MIT"
 }
