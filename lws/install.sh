@@ -54,20 +54,38 @@ detect_platform() {
 # --- Try to download prebuilt binary ---
 try_download() {
   local platform="$1"
-  local release_url="https://github.com/${REPO}/releases/latest/download/lws-${platform}"
-
-  info "Downloading prebuilt binary for ${platform}..."
   TMPDIR="$(mktemp -d)"
   local bin_path="${TMPDIR}/lws"
 
-  if curl -fsSL -o "$bin_path" "$release_url" 2>/dev/null; then
-    chmod +x "$bin_path"
-    # Verify it's actually an executable
-    if file "$bin_path" | grep -qi "executable\|mach-o\|elf"; then
-      echo "$bin_path"
-      return 0
-    fi
+  # Fetch recent release tags (latest first)
+  local tags
+  tags="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=5" 2>/dev/null \
+    | grep '"tag_name"' | sed 's/.*"tag_name": *"//;s/".*//')" || true
+
+  if [ -z "$tags" ]; then
+    # Fallback: try the /latest redirect if API call failed
+    tags="latest"
   fi
+
+  for tag in $tags; do
+    local release_url
+    if [ "$tag" = "latest" ]; then
+      release_url="https://github.com/${REPO}/releases/latest/download/lws-${platform}"
+    else
+      release_url="https://github.com/${REPO}/releases/download/${tag}/lws-${platform}"
+    fi
+
+    info "Downloading prebuilt binary for ${platform} (${tag})..."
+    if curl -fsSL -o "$bin_path" "$release_url" 2>/dev/null; then
+      chmod +x "$bin_path"
+      # Verify it's actually an executable
+      if file "$bin_path" | grep -qi "executable\|mach-o\|elf"; then
+        echo "$bin_path"
+        return 0
+      fi
+    fi
+    warn "Binary not available for ${tag}, trying previous release..."
+  done
 
   return 1
 }
