@@ -52,7 +52,81 @@ pub fn run(force: bool) -> Result<(), crate::CliError> {
     }
 
     println!("Updated lws to {tag}");
+
+    // Update language bindings
+    update_node_bindings();
+    update_python_bindings();
+
     Ok(())
+}
+
+/// Update Node.js bindings if npm is available.
+fn update_node_bindings() {
+    if Command::new("npm").arg("--version").output().is_err() {
+        return;
+    }
+
+    // Check if already installed
+    let check = Command::new("npm")
+        .args(["list", "-g", "@local-wallet-standard/node"])
+        .output();
+
+    match check {
+        Ok(output) if output.status.success() => {
+            println!("Updating Node bindings...");
+            let status = Command::new("npm")
+                .args(["install", "-g", "@local-wallet-standard/node@latest"])
+                .status();
+            match status {
+                Ok(s) if s.success() => println!("Node bindings updated."),
+                _ => eprintln!("warn: failed to update Node bindings"),
+            }
+        }
+        _ => {} // not installed, skip
+    }
+}
+
+/// Update Python bindings if pip is available.
+fn update_python_bindings() {
+    // Try pip3 first, then python3 -m pip
+    let pip_cmd = if Command::new("pip3").arg("--version").output().is_ok() {
+        Some(("pip3", vec![]))
+    } else if Command::new("python3")
+        .args(["-m", "pip", "--version"])
+        .output()
+        .is_ok()
+    {
+        Some(("python3", vec!["-m", "pip"]))
+    } else {
+        None
+    };
+
+    let Some((cmd, prefix)) = pip_cmd else {
+        return;
+    };
+
+    // Check if already installed
+    let mut check = Command::new(cmd);
+    for arg in &prefix {
+        check.arg(arg);
+    }
+    check.args(["show", "local-wallet-standard"]);
+
+    match check.output() {
+        Ok(output) if output.status.success() => {
+            println!("Updating Python bindings...");
+            let mut upgrade = Command::new(cmd);
+            for arg in &prefix {
+                upgrade.arg(arg);
+            }
+            upgrade.args(["install", "--upgrade", "local-wallet-standard"]);
+            match upgrade.status() {
+                Ok(s) if s.success() => println!("Python bindings updated."),
+                _ => eprintln!("warn: failed to update Python bindings"),
+            }
+        }
+        _ => {} // not installed, skip
+    }
 }
 
 /// Fetch the latest release tag from GitHub API using curl.

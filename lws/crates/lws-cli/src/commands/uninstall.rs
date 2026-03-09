@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::process::Command;
 
 pub fn run(purge: bool) -> Result<(), crate::CliError> {
     let install_dir = install_dir();
@@ -59,6 +60,10 @@ pub fn run(purge: bool) -> Result<(), crate::CliError> {
         println!("Removed {}", vault_path.display());
     }
 
+    // Uninstall language bindings
+    uninstall_node_bindings();
+    uninstall_python_bindings();
+
     // Clean PATH from shell configs
     remove_path_entries(&install_dir);
 
@@ -87,6 +92,51 @@ fn home_dir() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn uninstall_node_bindings() {
+    if Command::new("npm").arg("--version").output().is_err() {
+        return;
+    }
+    let check = Command::new("npm")
+        .args(["list", "-g", "@local-wallet-standard/node"])
+        .output();
+    if let Ok(output) = check {
+        if output.status.success() {
+            println!("Removing Node bindings...");
+            let _ = Command::new("npm")
+                .args(["uninstall", "-g", "@local-wallet-standard/node"])
+                .status();
+        }
+    }
+}
+
+fn uninstall_python_bindings() {
+    // Try pip3 first, then python3 -m pip
+    let result = Command::new("pip3")
+        .args(["show", "local-wallet-standard"])
+        .output();
+    let installed = matches!(result, Ok(ref o) if o.status.success());
+
+    if installed {
+        println!("Removing Python bindings...");
+        let _ = Command::new("pip3")
+            .args(["uninstall", "-y", "local-wallet-standard"])
+            .status();
+        return;
+    }
+
+    let result = Command::new("python3")
+        .args(["-m", "pip", "show", "local-wallet-standard"])
+        .output();
+    if let Ok(output) = result {
+        if output.status.success() {
+            println!("Removing Python bindings...");
+            let _ = Command::new("python3")
+                .args(["-m", "pip", "uninstall", "-y", "local-wallet-standard"])
+                .status();
+        }
+    }
 }
 
 fn remove_path_entries(install_dir: &PathBuf) {

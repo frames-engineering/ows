@@ -218,7 +218,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-addon-${{ matrix.target }}
-          path: bindings/node/*.node
+          path: |
+            bindings/node/*.node
+            bindings/node/index.js
+            bindings/node/index.d.ts
 
   publish-npm:
     needs: node-addons
@@ -262,7 +265,17 @@ jobs:
           path: bindings/node/artifacts
 
       - name: Move artifacts to platform packages
-        run: npx napi artifacts --dir artifacts
+        run: |
+          npx napi artifacts --dir artifacts
+          cp artifacts/index.js . 2>/dev/null || true
+          cp artifacts/index.d.ts . 2>/dev/null || true
+
+      - name: Verify index.js exists
+        run: |
+          if [ ! -f index.js ] || [ ! -f index.d.ts ]; then
+            echo "ERROR: index.js or index.d.ts missing — npm package would be broken"
+            exit 1
+          fi
 
       - name: Publish platform packages
         env:
