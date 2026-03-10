@@ -139,6 +139,12 @@ pub fn decrypt(envelope: &CryptoEnvelope, passphrase: &str) -> Result<SecretByte
             envelope.kdfparams.dklen
         )));
     }
+    if envelope.kdfparams.dklen != KDF_DKLEN {
+        return Err(CryptoError::InvalidParams(format!(
+            "dklen={} is unsupported, expected exactly {KDF_DKLEN}",
+            envelope.kdfparams.dklen
+        )));
+    }
 
     let log_n = n.trailing_zeros() as u8;
     let params = ScryptParams::new(
@@ -242,5 +248,40 @@ mod tests {
         let envelope = encrypt(plaintext, "correct").unwrap();
         let result = decrypt(&envelope, "wrong");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_dklen_above_32_should_not_panic() {
+        // BUG TEST: When dklen > 32 in a tampered envelope, decrypt() panics
+        // instead of returning an error because Key::<Aes256Gcm>::from_slice()
+        // requires exactly 32 bytes. The validation only checks dklen >= 32,
+        // so dklen = 48 passes validation but causes:
+        //   derived_key = vec![0u8; 48]  (48 bytes)
+        //   Key::<Aes256Gcm>::from_slice(&derived_key)  → panic! (expects 32)
+        //
+        // Library code must never panic on user/file input — it should return Err.
+        let plaintext = b"test data";
+        let mut envelope = encrypt(plaintext, "pass").unwrap();
+
+        // Tamper: set dklen to 48 (passes the >= 32 check but panics at from_slice)
+        envelope.kdfparams.dklen = 48;
+
+        // This should return Err, not panic.
+        // Use catch_unwind to detect the panic if the bug is present.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decrypt(&envelope, "pass")));
+
+        match result {
+            Ok(Err(_)) => { /* Good: returned a proper error */ }
+            Ok(Ok(_)) => {
+                panic!("decrypt with dklen=48 should not succeed")
+            }
+            Err(_) => {
+                panic!(
+                    "decrypt with dklen=48 panicked instead of returning an error — \
+                     Key::<Aes256Gcm>::from_slice() requires exactly 32 bytes"
+                )
+            }
+        }
     }
 }

@@ -466,24 +466,45 @@ pub fn sign_and_send(
     vault_path: Option<&Path>,
 ) -> Result<SendResult, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let chain = parse_chain(chain)?;
+    let chain_info = parse_chain(chain)?;
 
-    // 1. Sign
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
+    let key = decrypt_signing_key(wallet, chain_info.chain_type, passphrase, index, vault_path)?;
+
+    sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url)
+}
+
+/// Sign, encode, and broadcast a transaction using an already-resolved private key.
+///
+/// This is the shared core of the send-transaction flow. Both the library's
+/// [`sign_and_send`] (which resolves keys from the vault) and the CLI (which
+/// resolves keys via env vars / stdin prompts) delegate here so the
+/// sign → encode → broadcast pipeline is never duplicated.
+pub fn sign_encode_and_broadcast(
+    private_key: &[u8],
+    chain: &str,
+    tx_bytes: &[u8],
+    rpc_url: Option<&str>,
+) -> Result<SendResult, LwsLibError> {
+    let chain = parse_chain(chain)?;
     let signer = signer_for_chain(chain.chain_type);
-    let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
-    // 2. Encode the full signed transaction
-    let signed_tx = signer.encode_signed_transaction(&tx_bytes, &output)?;
+    // 1. Extract signable portion (strips signature-slot headers for Solana; no-op for others)
+    let signable = signer.extract_signable_bytes(tx_bytes)?;
 
-    // 3. Resolve RPC URL using exact chain_id
+    // 2. Sign
+    let output = signer.sign_transaction(private_key, signable)?;
+
+    // 3. Encode the full signed transaction
+    let signed_tx = signer.encode_signed_transaction(tx_bytes, &output)?;
+
+    // 4. Resolve RPC URL using exact chain_id
     let rpc = resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?;
 
-    // 4. Broadcast the full signed transaction
+    // 5. Broadcast the full signed transaction
     let tx_hash = broadcast(chain.chain_type, &rpc, &signed_tx)?;
 
     Ok(SendResult { tx_hash })
@@ -1440,5 +1461,81 @@ mod tests {
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 2);
         assert!(sign_message("w1", "evm", "test", None, None, None, Some(vault)).is_ok());
         assert!(sign_message("w3", "evm", "test", None, None, None, Some(vault)).is_ok());
+    }
+
+    // ================================================================
+    // 11. BUG REGRESSION: CLI send_transaction broadcasts raw signature
+    // ================================================================
+
+    #[test]
+    fn signed_tx_must_differ_from_raw_signature() {
+        // BUG TEST: The CLI's send_transaction.rs broadcasts `output.signature`
+        // (raw 65-byte sig) instead of encoding the full signed transaction via
+        // signer.encode_signed_transaction(). This test proves the two are different
+        // — broadcasting the raw signature sends garbage to the RPC node.
+        //
+        // The library's sign_and_send correctly calls encode_signed_transaction
+        // before broadcast (ops.rs:481), but the CLI skips this step
+        // (send_transaction.rs:43).
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        save_privkey_wallet("send-bug", TEST_PRIVKEY, "", vault);
+
+        // Build a minimal unsigned EIP-1559 transaction
+        let items: Vec<u8> = [
+            lws_signer::rlp::encode_bytes(&[1]),          // chain_id = 1
+            lws_signer::rlp::encode_bytes(&[]),           // nonce = 0
+            lws_signer::rlp::encode_bytes(&[1]),          // maxPriorityFeePerGas
+            lws_signer::rlp::encode_bytes(&[100]),        // maxFeePerGas
+            lws_signer::rlp::encode_bytes(&[0x52, 0x08]), // gasLimit = 21000
+            lws_signer::rlp::encode_bytes(&[0xDE, 0xAD]), // to (truncated)
+            lws_signer::rlp::encode_bytes(&[]),           // value = 0
+            lws_signer::rlp::encode_bytes(&[]),           // data
+            lws_signer::rlp::encode_list(&[]),            // accessList
+        ]
+        .concat();
+
+        let mut unsigned_tx = vec![0x02u8];
+        unsigned_tx.extend_from_slice(&lws_signer::rlp::encode_list(&items));
+        let tx_hex = hex::encode(&unsigned_tx);
+
+        // Sign the transaction via the library
+        let sign_result =
+            sign_transaction("send-bug", "evm", &tx_hex, None, None, Some(vault)).unwrap();
+        let raw_signature = hex::decode(&sign_result.signature).unwrap();
+
+        // Now encode the full signed transaction (what the library does correctly)
+        let key = decrypt_signing_key("send-bug", ChainType::Evm, "", None, Some(vault)).unwrap();
+        let signer = signer_for_chain(ChainType::Evm);
+        let output = signer.sign_transaction(key.expose(), &unsigned_tx).unwrap();
+        let full_signed_tx = signer
+            .encode_signed_transaction(&unsigned_tx, &output)
+            .unwrap();
+
+        // The raw signature (65 bytes) and the full signed tx are completely different.
+        // Broadcasting the raw signature (as the CLI does) would always fail.
+        assert_eq!(
+            raw_signature.len(),
+            65,
+            "raw EVM signature should be 65 bytes (r || s || v)"
+        );
+        assert!(
+            full_signed_tx.len() > raw_signature.len(),
+            "full signed tx ({} bytes) must be larger than raw signature ({} bytes)",
+            full_signed_tx.len(),
+            raw_signature.len()
+        );
+        assert_ne!(
+            raw_signature, full_signed_tx,
+            "raw signature and full signed transaction must differ — \
+             broadcasting the raw signature (as CLI send_transaction.rs:43 does) is wrong"
+        );
+
+        // The full signed tx should start with the EIP-1559 type byte
+        assert_eq!(
+            full_signed_tx[0], 0x02,
+            "full signed EIP-1559 tx must start with type byte 0x02"
+        );
     }
 }
