@@ -1,7 +1,7 @@
 ---
 name: lws
 description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, Bitcoin, Cosmos, Tron, and TON via CLI, Node.js, or Python.
-version: 0.2.25
+version: 0.2.27
 metadata:
   openclaw:
     requires:
