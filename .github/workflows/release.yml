@@ -19,16 +19,7 @@ jobs:
       - name: Bump version in source files
         run: |
           V="${GITHUB_REF_NAME#v}"
-          # Python bindings
-          sed -i "s/^version = \".*\"/version = \"$V\"/" bindings/python/pyproject.toml bindings/python/Cargo.toml
-          # Node bindings
-          sed -i "s/^version = \".*\"/version = \"$V\"/" bindings/node/Cargo.toml
-          cd bindings/node
-          npm version "$V" --no-git-tag-version
-          for pkg in npm/*/package.json; do
-            jq --arg v "$V" '.version = $v' "$pkg" > tmp.json && mv tmp.json "$pkg"
-          done
-          jq --arg v "$V" '.optionalDependencies |= with_entries(.value = $v)' package.json > tmp.json && mv tmp.json package.json
+          "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --all
 
       - name: Commit version bump
         run: |
@@ -74,7 +65,7 @@ jobs:
         if: contains(matrix.target, 'linux')
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.14.1
+          version: 0.13.0
 
       - name: Install cargo-zigbuild
         if: contains(matrix.target, 'linux')
@@ -129,8 +120,7 @@ jobs:
       - name: Set version from tag
         run: |
           V="${GITHUB_REF_NAME#v}"
-          sed -i.bak "s/^version = \".*\"/version = \"$V\"/" bindings/python/pyproject.toml bindings/python/Cargo.toml
-          rm -f bindings/python/pyproject.toml.bak bindings/python/Cargo.toml.bak
+          "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --python
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -148,7 +138,7 @@ jobs:
           path: bindings/python/dist/*.whl
 
   publish-pypi:
-    needs: python-wheels
+    needs: [python-wheels, bump-version]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -195,27 +185,29 @@ jobs:
           rustup update stable
           rustup target add ${{ matrix.target }}
 
+      - name: Install zig
+        if: contains(matrix.target, 'linux')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.target, 'linux')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
       - name: Set version from tag
         run: |
           V="${GITHUB_REF_NAME#v}"
-          sed -i.bak "s/^version = \".*\"/version = \"$V\"/" Cargo.toml
-          rm -f Cargo.toml.bak
-          npm version "$V" --no-git-tag-version --allow-same-version
-          for pkg in npm/*/package.json; do
-            python3 -c "
-          import json
-          with open('$pkg') as f: d = json.load(f)
-          d['version'] = '$V'
-          with open('$pkg', 'w') as f: json.dump(d, f, indent=2)
-          "
-          done
+          "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --node
 
       - name: Install dependencies
         run: npm install --ignore-scripts
 
       - name: Build native addon (Linux - glibc 2.17+)
         if: contains(matrix.target, 'linux')
-        run: npx napi build --platform --release --target ${{ matrix.target }} --use-napi-cross
+        run: npx napi build --platform --release --target ${{ matrix.target }} --zig --zig-abi-suffix 2.17
 
       - name: Build native addon (macOS)
         if: "!contains(matrix.target, 'linux')"
@@ -231,7 +223,7 @@ jobs:
             bindings/node/index.d.ts
 
   publish-npm:
-    needs: [node-addons, build]
+    needs: [node-addons, build, bump-version]
     runs-on: ubuntu-latest
     environment: release
 
@@ -250,16 +242,7 @@ jobs:
       - name: Set version from tag
         run: |
           V="${GITHUB_REF_NAME#v}"
-          npm version "$V" --no-git-tag-version --allow-same-version
-          for pkg in npm/*/package.json; do
-            python3 -c "
-          import json
-          with open('$pkg') as f: d = json.load(f)
-          d['version'] = '$V'
-          with open('$pkg', 'w') as f: json.dump(d, f, indent=2)
-          "
-          done
-          jq --arg v "$V" '.optionalDependencies |= with_entries(.value = $v)' package.json > tmp.json && mv tmp.json package.json
+          "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --node
 
       - name: Install dependencies
         run: npm install --ignore-scripts
@@ -303,9 +286,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for dir in npm/*/; do
-            if [ -d "$dir" ]; then
-              npm publish "$dir" --access public || true
-            fi
+            output=$(npm publish "$dir" --access public 2>&1) || {
+              if echo "$output" | grep -qi "cannot publish over\|previously published"; then
+                echo "Already published: $dir — skipping"
+              else
+                echo "Failed to publish $dir"
+                echo "$output"
+                exit 1
+              fi
+            }
           done
 
       - name: Publish main package
@@ -314,7 +303,7 @@ jobs:
         run: npm publish --access public --ignore-scripts
 
   release:
-    needs: [build]
+    needs: [build, bump-version]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts

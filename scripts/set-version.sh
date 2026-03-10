@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 <version> --python|--node|--all" >&2
+  exit 1
+}
+
+[[ $# -lt 2 ]] && usage
+
+VERSION="$1"
+SCOPE="$2"
+
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+  echo "Error: invalid version '$VERSION'" >&2
+  exit 1
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+set_python_version() {
+  sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" \
+    "$REPO_ROOT/bindings/python/pyproject.toml" \
+    "$REPO_ROOT/bindings/python/Cargo.toml"
+  rm -f "$REPO_ROOT/bindings/python/pyproject.toml.bak" \
+        "$REPO_ROOT/bindings/python/Cargo.toml.bak"
+}
+
+set_node_version() {
+  sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" \
+    "$REPO_ROOT/bindings/node/Cargo.toml"
+  rm -f "$REPO_ROOT/bindings/node/Cargo.toml.bak"
+
+  cd "$REPO_ROOT/bindings/node"
+  npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+  for pkg in npm/*/package.json; do
+    jq --arg v "$VERSION" '.version = $v' "$pkg" > tmp.json && mv tmp.json "$pkg"
+  done
+
+  jq --arg v "$VERSION" \
+    '.optionalDependencies |= with_entries(.value = $v)' \
+    package.json > tmp.json && mv tmp.json package.json
+}
+
+case "$SCOPE" in
+  --python) set_python_version ;;
+  --node)   set_node_version ;;
+  --all)    set_python_version; set_node_version ;;
+  *) usage ;;
+esac
