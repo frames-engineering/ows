@@ -2,10 +2,11 @@ use std::io::IsTerminal;
 
 use crate::audit;
 use crate::CliError;
+use zeroize::Zeroize;
 
 pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliError> {
     // Generate mnemonic, then import it to create the wallet
-    let mnemonic_phrase = ows_lib::generate_mnemonic(words)?;
+    let mut mnemonic_phrase = ows_lib::generate_mnemonic(words)?;
     let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, None, Some(0), None)?;
 
     audit::log_wallet_created(&info);
@@ -32,6 +33,7 @@ pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliErro
         eprintln!("Use --show-mnemonic at creation time if you need a backup copy.");
     }
 
+    mnemonic_phrase.zeroize();
     Ok(())
 }
 
@@ -41,13 +43,17 @@ pub fn import(
     use_private_key: bool,
     chain: Option<&str>,
     index: u32,
-    secp256k1_key: Option<&str>,
-    ed25519_key: Option<&str>,
 ) -> Result<(), CliError> {
+    // Read curve-specific keys from environment variables (cleared immediately after reading)
+    let secp256k1_key = ows_signer::process_hardening::clear_env_var("OWS_SECP256K1_KEY");
+    let ed25519_key = ows_signer::process_hardening::clear_env_var("OWS_ED25519_KEY");
+    let secp256k1_key = secp256k1_key.as_deref().filter(|s| !s.is_empty());
+    let ed25519_key = ed25519_key.as_deref().filter(|s| !s.is_empty());
+
     let has_curve_keys = secp256k1_key.is_some() || ed25519_key.is_some();
     let both_curve_keys = secp256k1_key.is_some() && ed25519_key.is_some();
 
-    // Must specify exactly one import mode: --mnemonic, --private-key, or both curve keys
+    // Must specify exactly one import mode: --mnemonic, --private-key, or both curve keys (via env)
     if use_mnemonic && (use_private_key || has_curve_keys) {
         return Err(CliError::InvalidArgs(
             "cannot combine --mnemonic with --private-key or curve-specific keys".into(),
@@ -55,7 +61,8 @@ pub fn import(
     }
     if !use_mnemonic && !use_private_key && !both_curve_keys {
         return Err(CliError::InvalidArgs(
-            "specify --mnemonic, --private-key, or both --secp256k1-key and --ed25519-key".into(),
+            "specify --mnemonic, --private-key, or set OWS_SECP256K1_KEY and OWS_ED25519_KEY"
+                .into(),
         ));
     }
 
@@ -63,9 +70,9 @@ pub fn import(
         let phrase = super::read_mnemonic()?;
         ows_lib::import_wallet_mnemonic(name, &phrase, None, Some(index), None)?
     } else {
-        // Read from stdin only when both curve keys are not already provided
+        // Read from env/stdin only when both curve keys are not already provided
         let private_key_hex = if both_curve_keys {
-            String::new()
+            zeroize::Zeroizing::new(String::new())
         } else {
             super::read_private_key()?
         };
@@ -103,7 +110,7 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
     }
 
     // Try empty passphrase first, then prompt if it fails
-    let exported = match ows_lib::export_wallet(wallet_name, None, None) {
+    let mut exported = match ows_lib::export_wallet(wallet_name, None, None) {
         Ok(s) => s,
         Err(_) => {
             let passphrase = super::read_passphrase();
@@ -121,6 +128,7 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
     eprintln!("Do not share it. Store it securely offline.");
     eprintln!();
     println!("{exported}");
+    exported.zeroize();
 
     let info = ows_lib::get_wallet(wallet_name, None)?;
     audit::log_wallet_exported(&info.id);

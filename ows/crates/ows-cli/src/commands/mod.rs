@@ -14,13 +14,14 @@ use ows_core::KeyType;
 use ows_signer::process_hardening::clear_env_var;
 use ows_signer::{CryptoEnvelope, SecretBytes};
 use std::io::{self, BufRead, IsTerminal, Write};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Read mnemonic from OWS_MNEMONIC env var (or LWS_MNEMONIC fallback) or stdin.
-pub fn read_mnemonic() -> Result<String, CliError> {
+pub fn read_mnemonic() -> Result<Zeroizing<String>, CliError> {
     if let Some(value) = clear_env_var("OWS_MNEMONIC").or_else(|| clear_env_var("LWS_MNEMONIC")) {
         let trimmed = value.trim().to_string();
         if !trimmed.is_empty() {
-            return Ok(trimmed);
+            return Ok(Zeroizing::new(trimmed));
         }
     }
 
@@ -40,17 +41,17 @@ pub fn read_mnemonic() -> Result<String, CliError> {
         ));
     }
 
-    Ok(trimmed)
+    Ok(Zeroizing::new(trimmed))
 }
 
 /// Read a hex-encoded private key from OWS_PRIVATE_KEY env var (or LWS_PRIVATE_KEY fallback) or stdin.
-pub fn read_private_key() -> Result<String, CliError> {
+pub fn read_private_key() -> Result<Zeroizing<String>, CliError> {
     if let Some(value) =
         clear_env_var("OWS_PRIVATE_KEY").or_else(|| clear_env_var("LWS_PRIVATE_KEY"))
     {
         let trimmed = value.trim().to_string();
         if !trimmed.is_empty() {
-            return Ok(trimmed);
+            return Ok(Zeroizing::new(trimmed));
         }
     }
 
@@ -70,21 +71,21 @@ pub fn read_private_key() -> Result<String, CliError> {
         ));
     }
 
-    Ok(trimmed)
+    Ok(Zeroizing::new(trimmed))
 }
 
 /// Resolved wallet secret — either a mnemonic phrase or a key pair (JSON).
 pub enum WalletSecret {
-    Mnemonic(String),
+    Mnemonic(Zeroizing<String>),
     /// JSON key pair: `{"secp256k1":"hex","ed25519":"hex"}`
     PrivateKeys(SecretBytes),
 }
 
 /// Read a passphrase from OWS_PASSPHRASE env var (or LWS_PASSPHRASE fallback) or prompt interactively.
-pub fn read_passphrase() -> String {
+pub fn read_passphrase() -> Zeroizing<String> {
     if let Some(value) = clear_env_var("OWS_PASSPHRASE").or_else(|| clear_env_var("LWS_PASSPHRASE"))
     {
-        return value;
+        return Zeroizing::new(value);
     }
     let stdin = io::stdin();
     if stdin.is_terminal() {
@@ -92,9 +93,9 @@ pub fn read_passphrase() -> String {
         io::stderr().flush().ok();
         let mut line = String::new();
         stdin.lock().read_line(&mut line).unwrap_or(0);
-        line.trim().to_string()
+        Zeroizing::new(line.trim().to_string())
     } else {
-        String::new()
+        Zeroizing::new(String::new())
     }
 }
 
@@ -115,8 +116,10 @@ pub fn resolve_wallet_secret(wallet_name: &str) -> Result<WalletSecret, CliError
 
     match wallet.key_type {
         KeyType::Mnemonic => {
-            let phrase = String::from_utf8(secret.expose().to_vec())
-                .map_err(|_| CliError::InvalidArgs("wallet contains invalid mnemonic".into()))?;
+            let phrase =
+                Zeroizing::new(String::from_utf8(secret.expose().to_vec()).map_err(|_| {
+                    CliError::InvalidArgs("wallet contains invalid mnemonic".into())
+                })?);
             Ok(WalletSecret::Mnemonic(phrase))
         }
         KeyType::PrivateKey => Ok(WalletSecret::PrivateKeys(secret)),
@@ -157,8 +160,9 @@ pub fn resolve_signing_key(
     let signer = ows_signer::signer_for_chain(chain_type);
 
     match wallet_secret {
-        WalletSecret::Mnemonic(phrase) => {
+        WalletSecret::Mnemonic(mut phrase) => {
             let mnemonic = ows_signer::Mnemonic::from_phrase(&phrase)?;
+            phrase.zeroize();
             let path = signer.default_derivation_path(index);
             let curve = signer.curve();
             Ok(ows_signer::HdDeriver::derive_from_mnemonic_cached(
